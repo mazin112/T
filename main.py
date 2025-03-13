@@ -3,7 +3,6 @@ api_hash = 'YOUR_API_HASH'     # Your API Hash
 user_phone = '+10000000000'    # Your phone number for the user session
 bot_token = 'YOUR_BOT_TOKEN'   # Your bot token from BotFather
 
-
 import asyncio
 import getpass
 import time
@@ -11,9 +10,8 @@ from datetime import timedelta
 from telethon import TelegramClient, events, Button
 from telethon.tl.types import InputPeerChannel, InputPeerUser, Channel, Chat
 from telethon.tl.functions.channels import InviteToChannelRequest
-from telethon.errors.rpcerrorlist import PeerFloodError, UserPrivacyRestrictedError
+from telethon.errors.rpcerrorlist import PeerFloodError, UserPrivacyRestrictedError, FloodWaitError, BadRequestError
 from telethon.errors import SessionPasswordNeededError
-
 
 user_client = TelegramClient('user_session', api_id, api_hash)
 bot_client = TelegramClient('bot_session', api_id, api_hash)
@@ -28,7 +26,6 @@ def build_group_buttons(groups, prefix):
 
 @bot_client.on(events.NewMessage(pattern='/start'))
 async def start_handler(event):
-
     user_state[event.sender_id] = {}
     await event.respond(
         "Welcome to the Telegram Migration Bot made by @tr4m0ryp!\n\n"
@@ -40,9 +37,6 @@ async def start_handler(event):
 
 @bot_client.on(events.NewMessage(pattern='/help'))
 async def help_handler(event):
-    """
-    Respond to the /help command with instructions on how to use the bot.
-    """
     help_text = (
         "📖 *Telegram Migration Bot - Help*\n\n"
         "1. Start the bot with /start.\n"
@@ -69,7 +63,6 @@ async def callback_handler(event):
             return
         
         user_state[sender_id]['all_groups'] = {str(g.id): g for g in groups}
-        
         buttons = build_group_buttons(groups, "source")
         await event.edit("Select the *source group* (from which users will be collected):", buttons=buttons)
     
@@ -83,7 +76,6 @@ async def callback_handler(event):
             return
         
         user_state[sender_id]['source'] = source_group
-        
         remaining_groups = [g for gid, g in all_groups.items() if gid != group_id]
         
         if not remaining_groups:
@@ -142,6 +134,7 @@ async def migrate_members(event, sender_id):
     error_count = 0
     success_count = 0
     bot_count = 0 
+    delete_counter = 1  # Counter for logging invalid user IDs
     start_time = time.time()
     
     progress = await event.respond(
@@ -162,25 +155,40 @@ async def migrate_members(event, sender_id):
                 user_to_add = InputPeerUser(member.id, member.access_hash)
                 await user_client(InviteToChannelRequest(target_entity, [user_to_add]))
                 success_count += 1
-            
-            except PeerFloodError:
-                await event.respond("Flood error: Too many requests. Please try again later.")
-                breaks
-            
+            except FloodWaitError as e:
+                await event.respond(f"Rate limit encountered for user {member.first_name or ''}. Waiting for {e.seconds} seconds...")
+                await asyncio.sleep(e.seconds)
+                try:
+                    await user_client(InviteToChannelRequest(target_entity, [user_to_add]))
+                    success_count += 1
+                except Exception as inner_e:
+                    error_count += 1
+                    await event.respond(f"Failed to invite user {member.first_name or ''} after waiting: {inner_e}")
+            except BadRequestError as e:
+                if "Invalid object ID" in str(e):
+                    await event.respond(f"Delete account: {delete_counter} (Invalid user ID: {member.id})")
+                    delete_counter += 1
+                    error_count += 1
+                else:
+                    error_count += 1
+                    await event.respond(f"BadRequestError for user {member.first_name or ''}: {e}")
             except UserPrivacyRestrictedError:
                 await event.respond(
-                    f"User *{member.first_name or ''} {member.last_name or ''}* "
-                    "has privacy restrictions. Skipping."
+                    f"User *{member.first_name or ''} {member.last_name or ''}* has privacy restrictions. Skipping."
                 )
                 error_count += 1
-            
+            except PeerFloodError:
+                await event.respond("Peer Flood error: Too many requests. Waiting for 60 seconds before continuing...")
+                await asyncio.sleep(60)
             except Exception as e:
                 error_count += 1
-                await event.respond(f"Unexpected error with user {member.first_name or ''}: {e}")
-                if error_count > 1000000:
-                    await event.respond("Too many errors encountered. Migration stopped.")
-                    break
+                if "Invalid object ID" in str(e):
+                    await event.respond(f"Delete account: {delete_counter} (Invalid user ID: {member.id})")
+                    delete_counter += 1
+                else:
+                    await event.respond(f"Unexpected error with user {member.first_name or ''}: {e}")
         
+        # Update progress information
         elapsed = time.time() - start_time
         avg_time = elapsed / idx
         eta = avg_time * (total_members - idx)
@@ -199,9 +207,10 @@ async def migrate_members(event, sender_id):
         
         try:
             await progress.edit(progress_text)
-        except:
-            pass
+        except Exception as e:
+            print(f"Progress update error: {e}")
         
+        # Delay between invites to help avoid hitting rate limits
         await asyncio.sleep(10)
     
     final_elapsed = str(timedelta(seconds=int(time.time() - start_time)))
@@ -225,7 +234,6 @@ async def main():
             password = getpass.getpass("User password: ")
             await user_client.sign_in(password=password)
     
-
     await bot_client.start(bot_token=bot_token)
     print("Both user and bot clients are connected. Bot is running...")
     
