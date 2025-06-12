@@ -1,189 +1,240 @@
-# Telegram Migration Bot
+# Telegram Migration Bot (Modular Version)
 
-This repository contains a Python script that allows you to migrate users from one Telegram group to another. The script leverages two **Telethon** clients:
+This repository contains a modular Python application that allows you to migrate users from one Telegram group to another. The application uses multiple **Telethon** clients in a round-robin fashion for optimal performance and reliability.
 
-1. **User Client**: Authenticates via a normal user account (phone number). This client is responsible for:
-   - Scanning your groups and channels.
-   - Inviting users into the target group (avoiding bot restrictions).
+## Architecture
 
-2. **Bot Client**: Authenticates via a bot token. This client is responsible for:
-   - Handling user commands (`/start`, `/help`).
-   - Displaying inline buttons for group selection.
-   - Posting progress updates (migration status, number of members added, etc.).
+The application has been refactored into a modular structure with the following components:
 
-By separating these two roles, the script circumvents Telegram’s API limitations that prevent bots from inviting arbitrary users.
+1. **Bot Client**: Handles user commands and interface (`/start`, `/help`, inline buttons)
+2. **User Clients**: Multiple user accounts for sending invitations (round-robin switching)
+3. **Account Manager**: Manages multiple user account connections and authentication
+4. **User Filter**: Filters users based on activity (only includes users active within the last week)
+5. **Migration Engine**: Handles the core migration logic with round-robin account switching
+6. **Bot Handlers**: Manages all bot commands and callback handlers
+
+---
+
+## Project Structure
+
+```
+Telegram_Bot_Bulk_Inviter/
+├── main.py                 # Main entry point
+├── config.py               # Configuration file (not included in git)
+├── config_template.py      # Configuration template
+├── account_manager.py      # Account management module
+├── user_filter.py          # User filtering module
+├── migration_engine.py     # Migration logic module
+├── bot_handlers.py         # Bot command handlers
+├── requirements.txt        # Python dependencies
+├── .gitignore             # Git ignore file
+└── README.md              # This file
+```
 
 ---
 
 ## Features
 
-- **Two-session architecture** (User + Bot) to bypass Telegram’s invite restrictions.
-- **Inline buttons** for selecting source and target groups within the Telegram Bot interface.
-- **Real-time progress updates** (processed count, success count, error count, bot count, elapsed time, ETA).
-- **Skips bots** automatically to prevent errors about “Bots can only be admins in channels.”
-- **Flood control** with a configurable delay (default 10 seconds) between invitations to reduce the risk of `PeerFloodError`.
-
----
-
-## Table of Contents
-
-1. [Requirements](#requirements)
-2. [Installation](#installation)
-3. [Configuration](#configuration)
-4. [Running on a VPS](#running-on-a-vps)
-5. [Usage](#usage)
-6. [Troubleshooting](#troubleshooting)
-7. [Disclaimer](#disclaimer)
-8. [License](#license)
+- **Modular architecture** for better maintainability and extensibility
+- **Multiple user accounts** with round-robin switching for higher throughput
+- **Smart user filtering** (only migrates users active within the last week)
+- **Inline buttons** for selecting source and target groups
+- **Real-time progress updates** with detailed statistics
+- **Automatic bot detection** and skipping
+- **Flood control** with configurable delays and retry logic
+- **Account limiting** (200 invites per account per day by default)
+- **Graceful error handling** for various Telegram API errors
 
 ---
 
 ## Requirements
 
 - **Python 3.7+**  
-- **Telethon** library (installed via `pip`)
-- A **Telegram user account** (phone number) with permission to add new users to the target group(s).
-- A **Telegram bot token** (obtained from [BotFather](https://t.me/BotFather)).
+- **Telethon** library
+- Multiple **Telegram user accounts** (phone numbers) with permission to add users
+- A **Telegram bot token** (obtained from [BotFather](https://t.me/BotFather))
 
 ---
 
 ## Installation
 
-1. **Clone this repository** (or download the script):
+1. **Clone this repository**:
    ```bash
-   git clone https://github.com/yourusername/telegram-migration-bot.git
-   cd telegram-migration-bot
+   git clone <repository-url>
+   cd Telegram_Bot_Bulk_Inviter
    ```
 
 2. **Install required dependencies**:
    ```bash
-   pip install telethon
-   ```
-   Or, if you have a `requirements.txt`, use:
-   ```bash
    pip install -r requirements.txt
    ```
 
-3. **Verify Python version**:
+3. **Create configuration file**:
    ```bash
-   python --version
+   cp config_template.py config.py
    ```
-   Ensure it’s Python 3.7 or higher.
+
+4. **Edit the configuration file** with your credentials:
+   ```python
+   # config.py
+   api_id = 1234567               # Your API ID from my.telegram.org
+   api_hash = 'YOUR_API_HASH'     # Your API Hash from my.telegram.org
+   bot_token = 'YOUR_BOT_TOKEN'   # Your bot token from BotFather
+   
+   # Add your user accounts (first one is main account for scraping)
+   account_configs = [
+       {"phone": "+1234567890", "session": "user_session1"},  # main account
+       {"phone": "+1234567891", "session": "user_session2"},
+       # Add more accounts as needed
+   ]
+   ```
 
 ---
 
 ## Configuration
 
-Open the Python script (for example, `migration_bot.py`) and locate the following variables near the top:
+### Getting API Credentials
 
-```python
-api_id = 1234567               # Your API ID
-api_hash = 'YOUR_API_HASH'     # Your API Hash
-user_phone = '+10000000000'    # Your phone number for the user session
-bot_token = 'YOUR_BOT_TOKEN'   # Your bot token from BotFather
-```
+1. **API ID & API Hash**: 
+   - Go to [my.telegram.org/apps](https://my.telegram.org/apps)
+   - Login with your phone number
+   - Create a new application
+   - Copy the `api_id` and `api_hash`
 
-Replace them with **valid credentials**:
+2. **Bot Token**:
+   - Open Telegram and search for [@BotFather](https://t.me/BotFather)
+   - Create a new bot with `/newbot`
+   - Copy the bot token
 
-1. **API ID & API Hash**: Obtain these from [my.telegram.org](https://my.telegram.org/apps).
-2. **User Phone**: The phone number of the account that will perform the invitations.
-3. **Bot Token**: Received from BotFather after creating a new bot.
+3. **User Accounts**:
+   - Add multiple phone numbers to the `account_configs` list
+   - The first account is used for scraping members (main account)
+   - Additional accounts are used for sending invites in round-robin fashion
 
-> **Important**: Make sure your user account is a member or admin in both source and target groups, and that it has the permission to add members.
+### Configuration Options
 
----
-
-## Running on a VPS
-
-To run this bot on a Virtual Private Server (VPS) (e.g., Ubuntu, Debian, CentOS), follow these steps:
-
-1. **SSH into your VPS**:
-   ```bash
-   ssh user@your-vps-ip
-   ```
-
-2. **Install Python and pip** (if not already installed). For Ubuntu/Debian:
-   ```bash
-   sudo apt update
-   sudo apt install python3 python3-pip -y
-   ```
-
-3. **Clone or upload this repository** to your VPS:
-   ```bash
-   git clone https://github.com/yourusername/telegram-migration-bot.git
-   cd telegram-migration-bot
-   ```
-
-4. **Install dependencies**:
-   ```bash
-   pip3 install telethon
-   ```
-
-5. **Configure your script** by editing the API credentials.
-
-6. **Run the script**:
-   ```bash
-   python3 migration_bot.py
-   ```
-   - The script will prompt for your phone’s confirmation code on first run.
-   - After signing in, it will also start the bot session using your bot token.
-
-7. **(Optional) Keep the script running** in the background using `tmux` or `screen`:
-   ```bash
-   # Start a screen session
-   screen -S telegram-bot
-
-   # Run the script
-   python3 migration_bot.py
-
-   # Detach from the session by pressing Ctrl+A, then D
-   ```
-   This way, the script continues running even if your SSH session closes.
+- `MAX_INVITES_PER_ACCOUNT`: Maximum invites per account per day (default: 200)
+- `BATCH_SIZE`: Number of invites per account before switching (default: 3)
 
 ---
 
 ## Usage
 
-1. **Start the script** on your VPS (or locally):
+1. **Start the application**:
    ```bash
-   python3 migration_bot.py
+   python main.py
    ```
 
-2. **Log in with the user account**:  
-   - If it’s your first time, the script will ask for a confirmation code sent to your Telegram phone number.
-   - If you have two-factor authentication, you’ll also need to enter your password.
+2. **First-time setup**:
+   - The script will prompt for verification codes for each phone number
+   - Enter the codes sent to your Telegram accounts
+   - If you have 2FA enabled, enter your password when prompted
 
-3. **Open Telegram** and **start a chat** with your bot:
-   - Type `/start` in the bot’s chat.
-   - The bot will display a welcome message and an inline button to begin.
+3. **Using the bot**:
+   - Open Telegram and start a chat with your bot
+   - Type `/start` to begin
+   - Follow the inline button prompts to:
+     - Select source group (to scrape members from)
+     - Select target group (to invite members to)
+     - Start the migration process
 
-4. **Follow the steps** via the inline buttons:
-   - Select the **source group** (where you want to scrape members from).
-   - Select the **target group** (where you want to add these members).
-   - Confirm to start the migration.
+4. **Monitor progress**:
+   - The bot provides real-time updates including:
+     - Number of members processed
+     - Successful invites
+     - Error counts by type
+     - Elapsed time and ETA
 
-5. **Monitor progress** in real-time:
-   - The bot will show how many members have been processed, how many were successfully added, any errors, how many bots were skipped, elapsed time, and an estimated time remaining.
+---
+
+## Module Details
+
+### account_manager.py
+Handles connection and authentication of multiple user accounts. Manages account usage tracking and blocking status.
+
+### user_filter.py
+Filters users based on their last seen status. Only includes users who were active within the last week to improve migration success rate.
+
+### migration_engine.py
+Core migration logic with round-robin account switching. Handles invite sending, error handling, and retry logic.
+
+### bot_handlers.py
+Contains all Telegram bot command handlers and callback query handlers for the user interface.
+
+---
+
+## Running on VPS
+
+1. **Install Python and dependencies**:
+   ```bash
+   # Ubuntu/Debian
+   sudo apt update
+   sudo apt install python3 python3-pip git -y
+   
+   # CentOS/RHEL
+   sudo yum install python3 python3-pip git -y
+   ```
+
+2. **Clone and setup**:
+   ```bash
+   git clone <repository-url>
+   cd Telegram_Bot_Bulk_Inviter
+   pip3 install -r requirements.txt
+   cp config_template.py config.py
+   # Edit config.py with your credentials
+   ```
+
+3. **Run in background** (optional):
+   ```bash
+   # Using screen
+   screen -S telegram-bot
+   python3 main.py
+   # Press Ctrl+A then D to detach
+   
+   # Using tmux
+   tmux new-session -d -s telegram-bot 'python3 main.py'
+   ```
+
+---
+
+## Security
+
+- The `config.py` file is automatically excluded from git via `.gitignore`
+- Never commit your configuration file or session files to version control
+- Session files are created automatically and contain authentication data
+- Keep your API credentials and bot token secure
 
 ---
 
 ## Troubleshooting
 
-- **PeerFloodError**: Telegram may flag your account for spamming if you invite too many users too quickly. The script includes a default 10-second delay between invites. If you still encounter this error, increase the delay or reduce the total invites per run.
-- **Bots can only be admins**: This script automatically skips bot accounts in the source group and logs them under a “Bots” count instead of errors.
-- **User Privacy Restrictions**: Some users have strict privacy settings preventing them from being invited. These are skipped automatically and counted as errors.
-- **Session Files**: The script creates session files (e.g., `user_session.session`, `bot_session.session`) to store your login state. Keep them private and do not commit them to a public repo.
+### Common Issues
+
+- **PeerFloodError**: Account temporarily banned from inviting. The script automatically marks these accounts as blocked.
+- **FloodWaitError**: Rate limiting. The script waits the required time and retries.
+- **UserPrivacyRestrictedError**: User has privacy settings preventing invites.
+- **Session errors**: Delete session files and re-authenticate.
+
+### Error Categories
+
+The bot tracks different types of errors:
+- **Deleted accounts**: Users who have deleted their accounts
+- **Privacy restricted**: Users with strict privacy settings
+- **Blocked**: Users who have blocked the inviting account
+- **Bots**: Bot accounts (automatically skipped)
+- **Flood errors**: Rate limiting and flood control
 
 ---
 
 ## Disclaimer
 
-- This tool is provided for **educational** and **administrative** purposes only (e.g., to migrate your own group members).  
-- Using it to spam or add users without their consent may violate [Telegram Terms of Service](https://telegram.org/tos).  
-- The author is **not** responsible for any misuse or potential account bans.
+- This tool is for **educational** and **administrative** purposes only
+- Use only on groups you own or have permission to manage
+- Respect Telegram's Terms of Service
+- The author is not responsible for any account bans or misuse
 
 ---
 
 ## License
 
-This project is distributed under the **MIT License**. See the [LICENSE](LICENSE) file for more information.
+This project is distributed under the **MIT License**.
