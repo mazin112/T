@@ -1,8 +1,3 @@
-"""
-Migration engine module for Telegram Bot Bulk Inviter.
-Handles the core migration logic including round-robin account switching and invite sending.
-"""
-
 import asyncio
 import random
 import time
@@ -34,7 +29,6 @@ class MigrationEngine:
         }
     
     async def migrate_members(self, members, target_entity, progress_callback=None):
-        """Migrate members to target group using round-robin account switching."""
         invite_queue = asyncio.Queue()
         for member in members:
             invite_queue.put_nowait(member)
@@ -42,10 +36,8 @@ class MigrationEngine:
         total_members = len(members)
         start_time = time.time()
         
-        # Round-robin account management
         current_account_index = 0
         
-        # Start progress updater if callback provided
         stop_event = asyncio.Event()
         updater_task = None
         if progress_callback:
@@ -53,10 +45,8 @@ class MigrationEngine:
                 self._progress_updater(stop_event, total_members, start_time, progress_callback)
             )
         
-        # Start the round-robin worker
         await self._round_robin_worker(invite_queue, target_entity, current_account_index)
         
-        # Stop progress updater
         if updater_task:
             stop_event.set()
             await updater_task
@@ -66,17 +56,13 @@ class MigrationEngine:
     async def _round_robin_worker(self, invite_queue, target_entity, current_account_index):
         """Worker that processes invites using round-robin account switching."""
         while not invite_queue.empty():
-            # Get available accounts (not blocked and under limit)
             available_accounts = self.account_manager.get_available_accounts()
             
             if not available_accounts:
-                break  # No more available accounts
+                break            current_account = available_accounts[current_account_index % len(available_accounts)]
             
-            # Get current account in round-robin fashion
-            current_account = available_accounts[current_account_index % len(available_accounts)]
-            
-            # Process BATCH_SIZE invites with current account
-            batch_invites = 0            while batch_invites < BATCH_SIZE and not invite_queue.empty():
+            batch_invites = 0
+            while batch_invites < BATCH_SIZE and not invite_queue.empty():
                 available_accounts = self.account_manager.get_available_accounts()
                 if not available_accounts or current_account not in available_accounts:
                     break
@@ -96,13 +82,12 @@ class MigrationEngine:
                 invite_queue.task_done()
                 await asyncio.sleep(random.uniform(2, 5))  # Delay between invites
             
-            # Switch to next account and take a break
+            
             current_account_index += 1
-            if batch_invites > 0:  # Only take break if we actually sent invites
-                await asyncio.sleep(random.uniform(30, 60))  # 30-60 second break between account switches
+            if batch_invites > 0:  
+                await asyncio.sleep(random.uniform(30, 60)) 
     
     async def _send_invite(self, account, member, target_entity):
-        """Send an invite for a single member."""
         user_to_add = InputPeerUser(member.id, member.access_hash)
         client = account["client"]
         
@@ -133,7 +118,6 @@ class MigrationEngine:
                 self.counters["other"] += 1
     
     async def _handle_bad_request_error(self, error, account, member, target_entity):
-        """Handle BadRequestError with specific retry logic."""
         error_msg = str(error)
         if "Invalid object ID" in error_msg:
             self.counters["deleted_accounts"] += 1
@@ -153,7 +137,6 @@ class MigrationEngine:
             self.counters["other"] += 1
     
     async def _progress_updater(self, stop_event, total_members, start_time, progress_callback):
-        """Update progress periodically."""
         while not stop_event.is_set():
             processed = sum(self.counters.values())
             elapsed = time.time() - start_time
@@ -166,7 +149,6 @@ class MigrationEngine:
             await asyncio.sleep(5)
     
     def _get_final_stats(self, total_members, start_time):
-        """Get final migration statistics."""
         processed = sum(self.counters.values())
         elapsed_str = str(timedelta(seconds=int(time.time() - start_time)))
         
