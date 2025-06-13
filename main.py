@@ -29,7 +29,8 @@ async def main():
         logger.info("Starting bot client...")
         bot_client = TelegramClient('bot_session', api_id, api_hash)
         await bot_client.start(bot_token=bot_token)
-          bot_handlers = BotHandlers(bot_client, account_manager)
+        
+        bot_handlers = BotHandlers(bot_client, account_manager)
         
         logger.info("✅ All accounts connected. Bot is running...")
         logger.info(f"Connected accounts: {len(account_manager.user_accounts)}")
