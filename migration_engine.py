@@ -59,7 +59,9 @@ class MigrationEngine:
             available_accounts = self.account_manager.get_available_accounts()
             
             if not available_accounts:
-                break            current_account = available_accounts[current_account_index % len(available_accounts)]
+                break  
+
+            current_account = available_accounts[current_account_index % len(available_accounts)]
             
             batch_invites = 0
             while batch_invites < BATCH_SIZE and not invite_queue.empty():
