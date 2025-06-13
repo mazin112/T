@@ -1,0 +1,18 @@
+[Unit]
+Description=Telegram Bot Bulk Inviter
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/Telegram_Bot_Bulk_Inviter
+Environment=PATH=/home/Telegram_Bot_Bulk_Inviter/myenv/bin
+ExecStart=/home/Telegram_Bot_Bulk_Inviter/myenv/bin/python main.py
+Restart=always
+RestartSec=10
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=telegram-bot
+
+[Install]
+WantedBy=multi-user.target

@@ -13,14 +13,13 @@ class AccountManager:
         for acc in account_configs:
             client = TelegramClient(acc["session"], api_id, api_hash)
             await client.connect()
+            
             if not await client.is_user_authorized():
-                await client.send_code_request(acc["phone"])
-                code = input(f"Enter the code for {acc['phone']}: ")
-                try:
-                    await client.sign_in(acc["phone"], code)
-                except SessionPasswordNeededError:
-                    password = getpass.getpass(f"Password for {acc['phone']}: ")
-                    await client.sign_in(password=password)
+                print(f"❌ Account {acc['phone']} is not authenticated!")
+                print("Please run 'python setup_auth.py' first to authenticate all accounts.")
+                raise Exception(f"Account {acc['phone']} requires authentication. Run setup_auth.py first.")
+            
+            print(f"✓ Connected to account: {acc['phone']}")
             self.user_accounts.append({
                 "phone": acc["phone"],
                 "session": acc["session"],
