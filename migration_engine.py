@@ -22,8 +22,10 @@ from user_filter import UserFilter
 logger = logging.getLogger(__name__)
 
 class MigrationEngine:
-    def __init__(self, account_manager):
+    def __init__(self, account_manager, migration_controller=None, log_manager=None):
         self.account_manager = account_manager
+        self.migration_controller = migration_controller
+        self.log_manager = log_manager
         self.counters = {
             "success": 0,
             "deleted_accounts": 0,
@@ -141,19 +143,51 @@ class MigrationEngine:
     async def _round_robin_worker(self, invite_queue, target_entity, current_account_index):
         """Worker that processes invites using round-robin account switching."""
         while not invite_queue.empty():
+            # Check if migration is cancelled or paused
+            if self.migration_controller:
+                if self.migration_controller.is_cancelled():
+                    logger.info("Migration cancelled, stopping round-robin worker")
+                    break
+                
+                try:
+                    await self.migration_controller.wait_for_pause()
+                except asyncio.CancelledError:
+                    logger.info("Migration cancelled during pause, stopping round-robin worker")
+                    break
+            
             available_accounts = self.account_manager.get_available_accounts()
             
             if not available_accounts:
                 logger.warning("No available accounts remaining")
+                if self.log_manager:
+                    self.log_manager.log_migration("No available accounts remaining", "warning")
                 break  
 
             current_account = available_accounts[current_account_index % len(available_accounts)]
             account_phone = current_account.get("phone", "unknown")
             
-            batch_invites = 0
-            logger.info(f"Using account {account_phone} for next batch (max {BATCH_SIZE} invites)")
+            # Get batch size from migration controller if available
+            batch_size = BATCH_SIZE  # default
+            if self.migration_controller:
+                speed_settings = self.migration_controller.get_speed_settings()
+                batch_size = speed_settings.get("batch_size", BATCH_SIZE)
             
-            while batch_invites < BATCH_SIZE and not invite_queue.empty():
+            batch_invites = 0
+            logger.info(f"Using account {account_phone} for next batch (max {batch_size} invites)")
+            
+            # Update migration controller with current account
+            if self.migration_controller:
+                self.migration_controller.update_stats(current_account=account_phone)
+            
+            if self.log_manager:
+                self.log_manager.log_account_status(f"Starting batch with account {account_phone}")
+            
+            while batch_invites < batch_size and not invite_queue.empty():
+                # Check for cancellation within the batch
+                if self.migration_controller and self.migration_controller.is_cancelled():
+                    logger.info("Migration cancelled during batch processing")
+                    return
+                
                 available_accounts = self.account_manager.get_available_accounts()
                 if not available_accounts or current_account not in available_accounts:
                     logger.warning(f"Account {account_phone} no longer available")
@@ -173,15 +207,40 @@ class MigrationEngine:
                 batch_invites += 1
                 invite_queue.task_done()
                 
+                # Update migration controller stats
+                if self.migration_controller:
+                    self.migration_controller.update_stats(
+                        invites_sent=self.counters["success"],
+                        errors_count=sum(self.counters.values()) - self.counters["success"] - self.counters["bots"],
+                        accounts_used=account_phone
+                    )
+                
+                # Get speed settings for invite delay
+                delay_range = (2, 4)  # default
+                if self.migration_controller:
+                    speed_settings = self.migration_controller.get_speed_settings()
+                    delay_range = speed_settings.get("invite_delay", (2, 4))
+                
                 # Small delay between invites within the same account
-                await asyncio.sleep(random.uniform(2, 4))
+                invite_delay = random.uniform(*delay_range)
+                await asyncio.sleep(invite_delay)
             
             logger.info(f"Account {account_phone} completed batch with {batch_invites} invite attempts")
+            
+            if self.log_manager:
+                self.log_manager.log_account_status(f"Account {account_phone} completed batch with {batch_invites} invites")
+            
             current_account_index += 1
             
             # Longer break between accounts if we processed any invites
-            if batch_invites > 0:  
-                sleep_time = random.uniform(30, 60)
+            if batch_invites > 0:
+                # Get speed settings from migration controller if available
+                delay_range = (30, 60)  # default
+                if self.migration_controller:
+                    speed_settings = self.migration_controller.get_speed_settings()
+                    delay_range = speed_settings.get("account_delay", (30, 60))
+                
+                sleep_time = random.uniform(*delay_range)
                 logger.info(f"Switching to next account, sleeping for {sleep_time:.1f}s")
                 await asyncio.sleep(sleep_time)
     
@@ -197,10 +256,24 @@ class MigrationEngine:
         logger.info("Starting concurrent invitation worker")
         
         while True:
+            # Check if migration is cancelled or paused
+            if self.migration_controller:
+                if self.migration_controller.is_cancelled():
+                    logger.info("Migration cancelled, stopping invitation worker")
+                    break
+                
+                try:
+                    await self.migration_controller.wait_for_pause()
+                except asyncio.CancelledError:
+                    logger.info("Migration cancelled during pause, stopping invitation worker")
+                    break
+            
             available_accounts = self.account_manager.get_available_accounts()
             
             if not available_accounts:
                 logger.warning("No available accounts remaining")
+                if self.log_manager:
+                    self.log_manager.log_migration("No available accounts remaining", "warning")
                 break
             
             current_account = available_accounts[current_account_index % len(available_accounts)]
@@ -210,6 +283,13 @@ class MigrationEngine:
             if users_processed_in_batch == 0:
                 batch_count += 1
                 logger.info(f"Batch {batch_count}: Using account {account_phone} (max {BATCH_SIZE} invites)")
+                
+                # Update migration controller with current account
+                if self.migration_controller:
+                    self.migration_controller.update_stats(current_account=account_phone)
+                
+                if self.log_manager:
+                    self.log_manager.log_account_status(f"Starting batch {batch_count} with account {account_phone}")
             
             # Try to get next user ready for invitation
             user = await user_filter.get_next_ready_user(timeout=2.0)
@@ -230,19 +310,44 @@ class MigrationEngine:
             user_filter.mark_ready_user_done()
             users_processed_in_batch += 1
             
+            # Update migration controller stats
+            if self.migration_controller:
+                self.migration_controller.update_stats(
+                    invites_sent=self.counters["success"],
+                    errors_count=sum(self.counters.values()) - self.counters["success"] - self.counters["bots"],
+                    accounts_used=account_phone
+                )
+            
             # Check if we should switch accounts
             if users_processed_in_batch >= BATCH_SIZE:
                 logger.info(f"Account {account_phone} completed batch {batch_count} with {users_processed_in_batch} invites")
+                
+                if self.log_manager:
+                    self.log_manager.log_account_status(f"Account {account_phone} completed batch {batch_count} with {users_processed_in_batch} invites")
+                
                 current_account_index += 1
                 users_processed_in_batch = 0
                 
+                # Get speed settings from migration controller if available
+                delay_range = (30, 60)  # default
+                if self.migration_controller:
+                    speed_settings = self.migration_controller.get_speed_settings()
+                    delay_range = speed_settings.get("account_delay", (30, 60))
+                
                 # Break between accounts
-                sleep_time = random.uniform(30, 60)
+                sleep_time = random.uniform(*delay_range)
                 logger.info(f"Switching to next account, sleeping for {sleep_time:.1f}s")
                 await asyncio.sleep(sleep_time)
             else:
+                # Get speed settings for invite delay
+                delay_range = (2, 4)  # default
+                if self.migration_controller:
+                    speed_settings = self.migration_controller.get_speed_settings()
+                    delay_range = speed_settings.get("invite_delay", (2, 4))
+                
                 # Small delay between invites within same account
-                await asyncio.sleep(random.uniform(2, 4))
+                invite_delay = random.uniform(*delay_range)
+                await asyncio.sleep(invite_delay)
         
         logger.info("Concurrent invitation worker completed")
     
@@ -260,10 +365,17 @@ class MigrationEngine:
             self.account_manager.increment_usage(account)
             logger.info(f"✅ Successfully invited user {member_id} ({member_username})")
             
+            if self.log_manager:
+                self.log_manager.log_migration(f"Successfully invited user {member_id} ({member_username}) using account {account_phone}")
+            
         except FloodWaitError as e:
             logger.warning(f"⏳ Flood wait {e.seconds}s for account {account_phone}")
             self.counters["flood_wait"] += 1
             self._log_detailed_error("flood_wait", member, account_phone, str(e))
+            
+            if self.log_manager:
+                self.log_manager.log_migration(f"Flood wait {e.seconds}s for account {account_phone} while inviting user {member_id}", "warning")
+            
             await asyncio.sleep(e.seconds)
             
             # Retry after flood wait
@@ -272,16 +384,27 @@ class MigrationEngine:
                 self.counters["success"] += 1
                 self.account_manager.increment_usage(account)
                 logger.info(f"✅ Successfully invited user {member_id} after flood wait")
+                
+                if self.log_manager:
+                    self.log_manager.log_migration(f"Successfully invited user {member_id} after flood wait using account {account_phone}")
+                    
             except Exception as retry_error:
                 logger.error(f"❌ Failed to invite user {member_id} after flood wait: {retry_error}")
                 self.counters["other"] += 1
                 self._log_detailed_error("retry_failed", member, account_phone, str(retry_error))
+                
+                if self.log_manager:
+                    self.log_manager.log_error(f"Failed to invite user {member_id} after flood wait: {retry_error}", "INVITATION")
                 
         except PeerFloodError as e:
             logger.error(f"🚫 Peer flood error for account {account_phone} - marking as blocked")
             self.counters["peer_flood"] += 1
             self._log_detailed_error("peer_flood", member, account_phone, str(e))
             self.account_manager.mark_account_blocked(account)
+            
+            if self.log_manager:
+                self.log_manager.log_error(f"Peer flood error for account {account_phone} - account blocked", "ACCOUNT")
+                self.log_manager.log_account_status(f"Account {account_phone} blocked due to peer flood error")
             
         except UserPrivacyRestrictedError as e:
             logger.debug(f"🔒 User {member_id} has privacy restrictions")
@@ -303,6 +426,9 @@ class MigrationEngine:
             self.counters["admin_required"] += 1
             self._log_detailed_error("admin_required", member, account_phone, str(e))
             
+            if self.log_manager:
+                self.log_manager.log_error(f"Admin rights required for account {account_phone}", "PERMISSION")
+            
         except UserBannedInChannelError as e:
             logger.debug(f"🚫 User {member_id} is banned in target channel")
             self.counters["banned_in_channel"] += 1
@@ -321,6 +447,9 @@ class MigrationEngine:
                 logger.error(f"❌ Unexpected error inviting user {member_id}: {error_msg}")
                 self.counters["other"] += 1
                 self._log_detailed_error("other", member, account_phone, error_msg)
+                
+                if self.log_manager:
+                    self.log_manager.log_error(f"Unexpected error inviting user {member_id}: {error_msg}", "INVITATION")
     
     async def _handle_bad_request_error(self, error, account, member, target_entity):
         error_msg = str(error)
