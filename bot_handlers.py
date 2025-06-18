@@ -347,20 +347,44 @@ class BotHandlers:
             members = await main_client.get_participants(source, aggressive=True)
             total_members = len(members)
             
+            # ✨ NEW: Ensure all accounts are members of the target group
+            await progress_msg.edit(f"Found *{total_members}* members from *{source.title}*.\n\n🔄 **Checking account access to target group...**")
+            
+            target_entity = InputPeerChannel(target.id, target.access_hash)
+            accounts_ready = await self.account_manager.ensure_accounts_in_target_group(target_entity)
+            
+            if not accounts_ready:
+                await progress_msg.edit(
+                    f"⚠️ **Warning**: Some accounts couldn't be added to the target group.\n\n"
+                    f"**Common reasons:**\n"
+                    f"• Main account lacks admin rights to invite others\n"
+                    f"• Target group doesn't allow member additions\n"
+                    f"• Some accounts have privacy restrictions\n\n"
+                    f"**Migration will continue with available accounts.**\n"
+                    f"Use `/logs account` to see detailed information."
+                )
+                await asyncio.sleep(3)
+            else:
+                await progress_msg.edit(f"✅ All accounts are now members of *{target.title}*!")
+                await asyncio.sleep(2)
+            
             # Start migration in controller
             self.migration_controller.start_migration(source.title, target.title, total_members)
             self.log_manager.log_migration(f"Started migration from {source.title} to {target.title} with {total_members} members")
             
             await progress_msg.edit(
-                f"Found *{total_members}* members from *{source.title}*.\n"
-                f"Starting concurrent filtering and invitation to *{target.title}* ...\n\n"
-                f"⚡ **NEW**: Filtering and inviting run in parallel for maximum efficiency!\n"
-                f"Use `/pause`, `/resume`, `/cancel` to control migration\n"
-                f"Use `/stats` to see real-time statistics"
+                f"🚀 **Starting Migration**\n\n"
+                f"**Source:** {source.title} ({total_members} members)\n"
+                f"**Target:** {target.title}\n"
+                f"**Available accounts:** {len(self.account_manager.get_available_accounts())}\n\n"
+                f"⚡ **Features enabled:**\n"
+                f"• Concurrent filtering and inviting\n"
+                f"• Automatic account switching\n"
+                f"• Auto-adding accounts to target group\n\n"
+                f"💡 Use `/pause`, `/resume`, `/cancel`, `/stats` to control migration"
             )
             
             migration_engine = MigrationEngine(self.account_manager, self.migration_controller, self.log_manager)
-            target_entity = InputPeerChannel(target.id, target.access_hash)
             
             # Enhanced progress callback for concurrent processing
             async def concurrent_progress_callback(counters, processed, total, elapsed_str, eta_str, phase="migration", extra_stats=None):
@@ -420,23 +444,24 @@ class BotHandlers:
             error_count = sum(counters.values()) - counters['success'] - counters['bots']
             
             final_text = (
-                f"✅ **Migration Completed!**\n\n"
+                f"🎉 **Migration Completed Successfully!**\n\n"
                 f"**📊 Filtering Results:**\n"
                 f"• Total members: {final_stats['total_members']}\n"
                 f"• Filtered for activity: {filter_stats.get('processed', 0)}\n"
                 f"• Active users found: {filter_stats.get('active_found', 0)}\n"
                 f"• Flood waits during filtering: {filter_stats.get('flood_waits', 0)}\n\n"
                 f"**🎯 Invitation Results:**\n"
-                f"• Successfully added: {counters['success']}\n"
-                f"• Privacy restricted: {counters.get('privacy_restricted', 0)}\n"
-                f"• Not mutual contact: {counters.get('not_mutual_contact', 0)}\n"
-                f"• Too many channels: {counters.get('too_many_channels', 0)}\n"
-                f"• Deleted accounts: {counters.get('deleted_accounts', 0)}\n"
-                f"• Other errors: {error_count - counters.get('privacy_restricted', 0) - counters.get('not_mutual_contact', 0) - counters.get('too_many_channels', 0) - counters.get('deleted_accounts', 0)}\n"
-                f"• Bots (skipped): {counters['bots']}\n\n"
+                f"• ✅ Successfully added: {counters['success']}\n"
+                f"• 🔒 Privacy restricted: {counters.get('privacy_restricted', 0)}\n"
+                f"• 👥 Not mutual contact: {counters.get('not_mutual_contact', 0)}\n"
+                f"• 📱 Too many channels: {counters.get('too_many_channels', 0)}\n"
+                f"• 🗑️ Deleted accounts: {counters.get('deleted_accounts', 0)}\n"
+                f"• ❌ Other errors: {error_count - counters.get('privacy_restricted', 0) - counters.get('not_mutual_contact', 0) - counters.get('too_many_channels', 0) - counters.get('deleted_accounts', 0)}\n"
+                f"• 🤖 Bots (skipped): {counters['bots']}\n\n"
                 f"**⏱️ Performance:**\n"
                 f"• Total elapsed time: {final_stats['elapsed_time']}\n"
-                f"• Concurrent processing: ✅ Enabled\n\n"
+                f"• Concurrent processing: ✅ Enabled\n"
+                f"• Auto account management: ✅ Enabled\n\n"
                 f"📄 Use `/logs` to download detailed logs\n"
                 f"📊 Detailed results exported to CSV file"
             )
@@ -448,13 +473,15 @@ class BotHandlers:
             self.migration_controller.cancel_migration()
             logger.error(f"Error during concurrent migration: {e}")
             self.log_manager.log_error(f"Migration failed: {str(e)}", "MIGRATION")
-            await event.respond(f"Error during migration: {e}")
+            await event.respond(f"❌ **Migration Failed:** {e}")
             await event.respond(
                 "💡 **Troubleshooting Tips:**\n"
                 "• Use `/logs error` to see detailed error information\n"
-                "• Ensure your accounts have admin rights in the target group\n"
+                "• Ensure your main account has admin rights in the target group\n"
                 "• Check that the target group allows member additions\n"
                 "• Verify your accounts aren't rate-limited\n"
+                "• Make sure all accounts can access the target group\n"
+                "• Use `/logs account` to check account status\n"
                 "• Use `/logs` to download full logs for analysis"
             )
     
