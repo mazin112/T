@@ -26,6 +26,9 @@ class MigrationEngine:
         self.account_manager = account_manager
         self.migration_controller = migration_controller
         self.log_manager = log_manager
+        # Store target channel info for proper entity resolution per client
+        self.target_channel_id = None
+        self.target_channel_access_hash = None
         self.counters = {
             "success": 0,
             "deleted_accounts": 0,
@@ -84,6 +87,11 @@ class MigrationEngine:
         """
         total_members = len(members)
         start_time = time.time()
+        
+        # Store target channel info for proper entity resolution
+        if hasattr(target_entity, 'channel_id'):
+            self.target_channel_id = target_entity.channel_id
+            self.target_channel_access_hash = target_entity.access_hash
         
         logger.info(f"Starting concurrent migration of {total_members} members (advanced_filtering={use_advanced_filtering})")
         
@@ -359,9 +367,35 @@ class MigrationEngine:
         member_username = getattr(member, 'username', None) or getattr(member, 'first_name', 'Unknown')
         
         try:
-            # Ensure target_entity is properly converted to the right format
-            # Use get_input_entity to get the correct entity format for the request
-            proper_target_entity = await client.get_input_entity(target_entity)
+            # NEW APPROACH: Create fresh InputPeerChannel for this specific client
+            # This ensures each client uses its own session context for entity resolution
+            if self.target_channel_id and self.target_channel_access_hash:
+                # Use stored channel info to create a fresh InputPeerChannel for this client
+                proper_target_entity = InputPeerChannel(self.target_channel_id, self.target_channel_access_hash)
+            else:
+                # Fallback: try to resolve using the provided entity
+                try:
+                    # For channels, we need to get the entity first, then convert to InputPeer
+                    if hasattr(target_entity, 'channel_id'):
+                        # Extract channel info from the provided entity
+                        channel_id = target_entity.channel_id
+                        access_hash = target_entity.access_hash
+                        proper_target_entity = InputPeerChannel(channel_id, access_hash)
+                    else:
+                        # Last resort: try to resolve with this client
+                        channel_entity = await client.get_entity(target_entity)
+                        proper_target_entity = InputPeerChannel(channel_entity.id, channel_entity.access_hash)
+                except Exception as resolution_error:
+                    logger.error(f"❌ Account {account_phone} cannot resolve target channel: {resolution_error}")
+                    self.counters["admin_required"] += 1
+                    self._log_detailed_error("channel_resolution_failed", member, account_phone, f"Cannot resolve target channel: {resolution_error}")
+                    
+                    if self.log_manager:
+                        self.log_manager.log_error(f"Account {account_phone} cannot resolve target channel", "CHANNEL_RESOLUTION")
+                    
+                    # Mark this account as blocked for channel resolution issues
+                    self.account_manager.mark_account_blocked(account)
+                    return
             
             logger.info(f"Attempting to invite user {member_id} ({member_username}) using account {account_phone}")
             await client(InviteToChannelRequest(proper_target_entity, [user_to_add]))
@@ -382,10 +416,15 @@ class MigrationEngine:
             
             await asyncio.sleep(e.seconds)
             
-            # Retry after flood wait
+            # Retry after flood wait with fresh entity
             try:
-                proper_target_entity = await client.get_input_entity(target_entity)
-                await client(InviteToChannelRequest(proper_target_entity, [user_to_add]))
+                if self.target_channel_id and self.target_channel_access_hash:
+                    retry_target_entity = InputPeerChannel(self.target_channel_id, self.target_channel_access_hash)
+                else:
+                    channel_entity = await client.get_entity(target_entity)
+                    retry_target_entity = InputPeerChannel(channel_entity.id, channel_entity.access_hash)
+                    
+                await client(InviteToChannelRequest(retry_target_entity, [user_to_add]))
                 self.counters["success"] += 1
                 self.account_manager.increment_usage(account)
                 logger.info(f"✅ Successfully invited user {member_id} after flood wait")
@@ -465,18 +504,41 @@ class MigrationEngine:
             logger.debug(f"🗑️ User {member_id} has invalid ID (deleted account)")
             self.counters["deleted_accounts"] += 1
             self._log_detailed_error("deleted_account", member, account_phone, error_msg)
+        elif "Invalid channel object" in error_msg or "Make sure to pass the right types" in error_msg:
+            # This is the specific error we're seeing - channel access issue
+            logger.error(f"❌ Account {account_phone} has invalid channel access: {error_msg}")
+            self.counters["admin_required"] += 1
+            self._log_detailed_error("invalid_channel_access", member, account_phone, error_msg)
+            
+            if self.log_manager:
+                self.log_manager.log_error(f"Account {account_phone} has invalid channel access - likely entity resolution issue", "CHANNEL_ACCESS")
+            
+            # Mark this account as blocked for channel access issues
+            self.account_manager.mark_account_blocked(account)
         elif "Too many requests" in error_msg:
             logger.warning(f"⚠️ Too many requests for account {account_phone}")
             self.counters["too_many_requests"] += 1
             self._log_detailed_error("too_many_requests", member, account_phone, error_msg)
             await asyncio.sleep(60)
             
-            # Retry after cooling down
+            # Retry after cooling down with fresh entity resolution
             try:
                 client = account["client"]
-                proper_target_entity = await client.get_input_entity(target_entity)
+                # Use the same robust entity resolution approach
+                if self.target_channel_id and self.target_channel_access_hash:
+                    retry_target_entity = InputPeerChannel(self.target_channel_id, self.target_channel_access_hash)
+                else:
+                    # Fallback to manual resolution
+                    if hasattr(target_entity, 'channel_id'):
+                        channel_id = target_entity.channel_id
+                        access_hash = target_entity.access_hash
+                        retry_target_entity = InputPeerChannel(channel_id, access_hash)
+                    else:
+                        channel_entity = await client.get_entity(target_entity)
+                        retry_target_entity = InputPeerChannel(channel_entity.id, channel_entity.access_hash)
+                    
                 user_to_add = InputPeerUser(member.id, member.access_hash)
-                await client(InviteToChannelRequest(proper_target_entity, [user_to_add]))
+                await client(InviteToChannelRequest(retry_target_entity, [user_to_add]))
                 self.counters["success"] += 1
                 self.account_manager.increment_usage(account)
                 logger.info(f"✅ Successfully invited user {member_id} after cooling down")

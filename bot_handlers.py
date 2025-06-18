@@ -456,33 +456,6 @@ class BotHandlers:
                 f"• 👥 Not mutual contact: {counters.get('not_mutual_contact', 0)}\n"
                 f"• 📱 Too many channels: {counters.get('too_many_channels', 0)}\n"
                 f"• 🗑️ Deleted accounts: {counters.get('deleted_accounts', 0)}\n"
-                f"• ❌ Other errors: {error_count - counters.get('privacy_restricted', 0) - counters.get('not_mutual_contact', 0) - counters.get('too_many_channels', 0) - counters.get('deleted_accounts', 0)}\n"
-                f"• 🤖 Bots (skipped): {counters['bots']}\n\n"
-                f"**⏱️ Performance:**\n"
-                f"• Total elapsed time: {final_stats['elapsed_time']}\n"
-                f"• Concurrent processing: ✅ Enabled\n"
-                f"• Auto account management: ✅ Enabled\n\n"
-                f"📄 Use `/logs` to download detailed logs\n"
-                f"📊 Detailed results exported to CSV file"
-            )
-            await progress_msg.edit(final_text)
-            
-            self.log_manager.log_migration(f"Migration completed successfully. Success: {counters['success']}, Errors: {error_count}")
-            
-        except Exception as e:
-            self.migration_controller.cancel_migration()
-            logger.error(f"Error during concurrent migration: {e}")
-            self.log_manager.log_error(f"Migration failed: {str(e)}", "MIGRATION")
-            await event.respond(f"❌ **Migration Failed:** {e}")
-            await event.respond(
-                "💡 **Troubleshooting Tips:**\n"
-                "• Use `/logs error` to see detailed error information\n"
-                "• Ensure your main account has admin rights in the target group\n"
-                "• Check that the target group allows member additions\n"
-                "• Verify your accounts aren't rate-limited\n"
-                "• Make sure all accounts can access the target group\n"
-                "• Use `/logs account` to check account status\n"
-                "• Use `/logs` to download full logs for analysis"
             )
     
     def _build_group_buttons(self, groups, prefix):
