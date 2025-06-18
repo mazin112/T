@@ -359,8 +359,12 @@ class MigrationEngine:
         member_username = getattr(member, 'username', None) or getattr(member, 'first_name', 'Unknown')
         
         try:
+            # Ensure target_entity is properly converted to the right format
+            # Use get_input_entity to get the correct entity format for the request
+            proper_target_entity = await client.get_input_entity(target_entity)
+            
             logger.info(f"Attempting to invite user {member_id} ({member_username}) using account {account_phone}")
-            await client(InviteToChannelRequest(target_entity, [user_to_add]))
+            await client(InviteToChannelRequest(proper_target_entity, [user_to_add]))
             self.counters["success"] += 1
             self.account_manager.increment_usage(account)
             logger.info(f"✅ Successfully invited user {member_id} ({member_username})")
@@ -380,7 +384,8 @@ class MigrationEngine:
             
             # Retry after flood wait
             try:
-                await client(InviteToChannelRequest(target_entity, [user_to_add]))
+                proper_target_entity = await client.get_input_entity(target_entity)
+                await client(InviteToChannelRequest(proper_target_entity, [user_to_add]))
                 self.counters["success"] += 1
                 self.account_manager.increment_usage(account)
                 logger.info(f"✅ Successfully invited user {member_id} after flood wait")
@@ -468,8 +473,10 @@ class MigrationEngine:
             
             # Retry after cooling down
             try:
+                client = account["client"]
+                proper_target_entity = await client.get_input_entity(target_entity)
                 user_to_add = InputPeerUser(member.id, member.access_hash)
-                await account["client"](InviteToChannelRequest(target_entity, [user_to_add]))
+                await client(InviteToChannelRequest(proper_target_entity, [user_to_add]))
                 self.counters["success"] += 1
                 self.account_manager.increment_usage(account)
                 logger.info(f"✅ Successfully invited user {member_id} after cooling down")
