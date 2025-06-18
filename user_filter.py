@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, timezone
 from telethon.tl.types import UserStatusOnline, UserStatusOffline, UserStatusRecently, UserStatusLastWeek, UserStatusLastMonth
 from telethon.errors import FloodWaitError
 
@@ -17,6 +17,29 @@ class UserFilter:
             "flood_waits": 0,
             "errors": 0
         }
+    
+    @staticmethod
+    def _safe_datetime_comparison(dt1, dt2):
+        """
+        Safely compare two datetime objects, handling timezone-aware vs timezone-naive differences.
+        """
+        try:
+            # If both are timezone-aware or both are timezone-naive, compare directly
+            if (dt1.tzinfo is None) == (dt2.tzinfo is None):
+                return dt1 >= dt2
+            
+            # If one is timezone-aware and the other is not, convert to UTC for comparison
+            if dt1.tzinfo is not None and dt2.tzinfo is None:
+                # dt1 is timezone-aware, dt2 is naive - assume dt2 is UTC
+                dt2 = dt2.replace(tzinfo=timezone.utc)
+            elif dt1.tzinfo is None and dt2.tzinfo is not None:
+                # dt1 is naive, dt2 is timezone-aware - assume dt1 is UTC
+                dt1 = dt1.replace(tzinfo=timezone.utc)
+            
+            return dt1 >= dt2
+        except Exception as e:
+            logger.debug(f"Error in datetime comparison: {e}")
+            return True  # Default to True on comparison error
     
     @staticmethod
     async def is_user_active_basic(user):
@@ -43,7 +66,7 @@ class UserFilter:
                 # Check if offline time is within last week
                 if hasattr(user_status, 'was_online') and user_status.was_online:
                     week_ago = datetime.now() - timedelta(days=7)
-                    return user_status.was_online >= week_ago
+                    return UserFilter._safe_datetime_comparison(user_status.was_online, week_ago)
                 return True  # Default to including if we can't determine
             else:
                 return True  # Default to including unknown status types
@@ -177,7 +200,7 @@ class UserFilter:
                 elif isinstance(user_status, UserStatusOffline):
                     if hasattr(user_status, 'was_online') and user_status.was_online:
                         week_ago = datetime.now() - timedelta(days=7)
-                        return user_status.was_online >= week_ago
+                        return UserFilter._safe_datetime_comparison(user_status.was_online, week_ago)
                     return False
                 else:
                     return True
