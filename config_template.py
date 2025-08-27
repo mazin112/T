@@ -3,9 +3,9 @@
 
 # Telegram API credentials
 # Get these from https://my.telegram.org/apps
-api_id = 1234567  # Replace with your API ID
-api_hash = 'your_api_hash_here'  # Replace with your API hash
-bot_token = 'your_bot_token_here'  # Replace with your bot token
+api_id = 22205158  # Replace with your API ID
+api_hash = '4fd96f16abab38cea55da11166fb4184'  # Replace with your API hash
+bot_token = '6830782123:AAHb3T8gdva0J8LKlewJBeLbHrRgeiphBYc'  # Replace with your bot token
 
 # Account configurations
 # The first account in the list is the main account used for source selection & scraping
